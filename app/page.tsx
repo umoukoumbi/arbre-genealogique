@@ -4,20 +4,29 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
 export default function FamilyTreeApp() {
+  const [session, setSession] = useState<any>(null);
+  const [userRole, setUserRole] = useState<string>('viewer'); // 'viewer', 'editor', 'admin'
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
+  // Identifiants de connexion
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+
   const [persons, setPersons] = useState<any[]>([]);
   const [relations, setRelations] = useState<any[]>([]);
   const [biographies, setBiographies] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'arbre' | 'gestion'>('arbre');
   
-  // États du formulaire principal (Ajout / Édition)
+  // États du formulaire principal
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     nom: '',
     prenom: '',
-    surnom: '',
+    surnom: 'Branche MOUKOUMBI',
     sexe: 'M',
     date_naissance: '',
     lieu_naissance: '',
@@ -25,7 +34,6 @@ export default function FamilyTreeApp() {
     lieu_sepulture: ''
   });
 
-  // État pour la modale de biographie et relations
   const [selectedPerson, setSelectedPerson] = useState<any | null>(null);
   const [bioData, setBioData] = useState({
     professions: '',
@@ -47,9 +55,56 @@ export default function FamilyTreeApp() {
   const [newRelationTargetId, setNewRelationTargetId] = useState('');
   const [newRelationType, setNewRelationType] = useState<'parent_enfant' | 'conjoint'>('parent_enfant');
 
+  // Vérification de la session au chargement
   useEffect(() => {
-    fetchData();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchUserRole(session.user.id);
+      setLoadingAuth(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchUserRole(session.user.id);
+      else setUserRole('viewer');
+      setLoadingAuth(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  async function fetchUserRole(userId: string) {
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('role')
+      .eq('id', userId)
+      .single();
+
+    if (data && !error) {
+      setUserRole(data.role);
+    } else {
+      setUserRole('viewer'); // Par défaut si aucun profil trouvé
+    }
+  }
+
+  useEffect(() => {
+    if (session) {
+      fetchData();
+    }
+  }, [session]);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError('');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      setAuthError('Identifiants incorrects ou accès non autorisé.');
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+  }
 
   async function fetchData() {
     setLoading(true);
@@ -58,31 +113,32 @@ export default function FamilyTreeApp() {
   }
 
   async function fetchPersons() {
-    const { data, error } = await supabase.from('persons').select('*').order('nom', { ascending: true });
-    if (error) console.error('Erreur chargement personnes :', error);
-    else setPersons(data || []);
+    const { data } = await supabase.from('persons').select('*').order('nom', { ascending: true });
+    setPersons(data || []);
   }
 
   async function fetchRelations() {
-    const { data, error } = await supabase.from('relations').select('*');
-    if (error) console.error('Erreur chargement relations :', error);
-    else setRelations(data || []);
+    const { data } = await supabase.from('relations').select('*');
+    setRelations(data || []);
   }
 
   async function fetchBiographies() {
-    const { data, error } = await supabase.from('biographies').select('*');
-    if (error) console.error('Erreur chargement biographies :', error);
-    else setBiographies(data || []);
+    const { data } = await supabase.from('biographies').select('*');
+    setBiographies(data || []);
   }
 
   async function fetchDocuments() {
-    const { data, error } = await supabase.from('documents').select('*');
-    if (error) console.error('Erreur chargement documents :', error);
-    else setDocuments(data || []);
+    const { data } = await supabase.from('documents').select('*');
+    setDocuments(data || []);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (userRole === 'viewer') {
+      alert("Vous n'avez pas les droits nécessaires pour effectuer cette action.");
+      return;
+    }
+
     const cleanedData = {
       nom: formData.nom.trim().toUpperCase(),
       prenom: formData.prenom.trim(),
@@ -96,21 +152,22 @@ export default function FamilyTreeApp() {
 
     if (editingId) {
       const { error } = await supabase.from('persons').update(cleanedData).eq('id', editingId);
-      if (error) alert('Erreur lors de la modification : ' + error.message);
+      if (error) alert('Erreur : ' + error.message);
       else { setEditingId(null); resetForm(); fetchPersons(); }
     } else {
       const { error } = await supabase.from('persons').insert([cleanedData]);
-      if (error) alert("Erreur lors de l'ajout : " + error.message);
+      if (error) alert('Erreur : ' + error.message);
       else { resetForm(); fetchPersons(); }
     }
   }
 
   function handleEdit(person: any) {
+    if (userRole === 'viewer') return;
     setEditingId(person.id);
     setFormData({
       nom: person.nom || '',
       prenom: person.prenom || '',
-      surnom: person.surnom || '',
+      surnom: person.surnom || 'Branche MOUKOUMBI',
       sexe: person.sexe || 'M',
       date_naissance: person.date_naissance || '',
       lieu_naissance: person.lieu_naissance || '',
@@ -122,9 +179,13 @@ export default function FamilyTreeApp() {
   }
 
   async function handleDelete(id: string) {
+    if (userRole !== 'admin') {
+      alert("Réservé aux super-utilisateurs (Admin) !");
+      return;
+    }
     if (confirm('Voulez-vous vraiment supprimer ce membre ?')) {
       const { error } = await supabase.from('persons').delete().eq('id', id);
-      if (error) alert('Erreur lors de la suppression : ' + error.message);
+      if (error) alert('Erreur : ' + error.message);
       else fetchData();
     }
   }
@@ -147,7 +208,10 @@ export default function FamilyTreeApp() {
 
   async function handleSaveBio(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedPerson) return;
+    if (userRole === 'viewer') {
+      alert("Accès refusé en lecture seule.");
+      return;
+    }
     const existingBio = biographies.find(b => b.person_id === selectedPerson.id);
     const bioPayload = {
       person_id: selectedPerson.id,
@@ -162,12 +226,13 @@ export default function FamilyTreeApp() {
       ? (await supabase.from('biographies').update(bioPayload).eq('id', existingBio.id)).error 
       : (await supabase.from('biographies').insert([bioPayload])).error;
 
-    if (errorBio) alert('Erreur lors de l’enregistrement : ' + errorBio.message);
+    if (errorBio) alert('Erreur : ' + errorBio.message);
     else { alert('Biographie enregistrée avec succès !'); fetchBiographies(); }
   }
 
   async function handleAddDocument(e: React.FormEvent) {
     e.preventDefault();
+    if (userRole === 'viewer') return;
     if (!selectedPerson || !docData.titre || !uploadingFile) {
       alert('Veuillez renseigner un titre et sélectionner un fichier.');
       return;
@@ -202,6 +267,10 @@ export default function FamilyTreeApp() {
   }
 
   async function handleDeleteDocument(docId: string) {
+    if (userRole !== 'admin') {
+      alert("Réservé aux administrateurs.");
+      return;
+    }
     if (confirm('Supprimer ce document ?')) {
       const { error } = await supabase.from('documents').delete().eq('id', docId);
       if (error) alert('Erreur : ' + error.message);
@@ -211,6 +280,7 @@ export default function FamilyTreeApp() {
 
   async function handleAddRelationToPerson(e: React.FormEvent) {
     e.preventDefault();
+    if (userRole === 'viewer') return;
     if (!selectedPerson || !newRelationTargetId) return;
     let parentId = selectedPerson.id;
     let childId = newRelationTargetId;
@@ -228,18 +298,75 @@ export default function FamilyTreeApp() {
   }
 
   async function deleteRelation(relationId: string) {
+    if (userRole === 'viewer') return;
     const { error } = await supabase.from('relations').delete().eq('id', relationId);
     if (error) alert('Erreur suppression : ' + error.message);
     else fetchRelations();
   }
 
   function resetForm() {
-    setFormData({ nom: '', prenom: '', surnom: '', sexe: 'M', date_naissance: '', lieu_naissance: '', date_deces: '', lieu_sepulture: '' });
+    setFormData({ nom: '', prenom: '', surnom: 'Branche MOUKOUMBI', sexe: 'M', date_naissance: '', lieu_naissance: '', date_deces: '', lieu_sepulture: '' });
     setEditingId(null);
   }
 
-  const filteredPersons = persons.filter(p => `${p.nom} ${p.prenom}`.toLowerCase().includes(searchTerm.toLowerCase()));
+  // Écran de chargement initial de l'authentification
+  if (loadingAuth) {
+    return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-600">Chargement de la plateforme...</div>;
+  }
 
+  // ÉCRAN DE CONNEXION DESIGN SI NON CONNECTÉ
+  if (!session) {
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-blue-900 via-gray-900 to-black flex items-center justify-center p-6">
+        <div className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl shadow-2xl max-w-md w-full text-white">
+          <div className="text-center mb-8">
+            <span className="text-4xl">🌳</span>
+            <h1 className="text-2xl font-bold mt-3">Familles Madeke & Moukoumbi</h1>
+            <p className="text-gray-300 text-xs mt-1">Plateforme mémorielle sécurisée</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            {authError && (
+              <div className="bg-red-500/20 border border-red-500 text-red-200 p-3 rounded-xl text-xs text-center">
+                {authError}
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-medium text-gray-300 mb-1">Adresse Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="w-full bg-black/30 border border-white/20 p-3 rounded-xl text-sm text-white placeholder-gray-400 focus:outline-none focus:border-blue-400"
+                placeholder="votre@email.com"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-300 mb-1">Mot de passe</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="w-full bg-black/30 border border-white/20 p-3 rounded-xl text-sm text-white placeholder-gray-400 focus:outline-none focus:border-blue-400"
+                placeholder="••••••••"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl font-medium text-sm transition shadow-lg"
+            >
+              Se connecter
+            </button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  // APPLICATION PRINCIPALE UNE FOIS CONNECTÉ
+  const filteredPersons = persons.filter(p => `${p.nom} ${p.prenom}`.toLowerCase().includes(searchTerm.toLowerCase()));
   const brancheMoukoumbi = Array.from(new Map(filteredPersons.filter(p => p.surnom && p.surnom.toLowerCase().includes('moukoumbi') && !p.surnom.toLowerCase().includes('madeke')).map(p => [p.id, p])).values());
   const brancheMadeke = Array.from(new Map(filteredPersons.filter(p => p.surnom && p.surnom.toLowerCase().includes('madeke') && !p.surnom.toLowerCase().includes('moukoumbi')).map(p => [p.id, p])).values());
   const membresMixtesOuSansBranche = Array.from(new Map(filteredPersons.filter(p => {
@@ -256,7 +383,6 @@ export default function FamilyTreeApp() {
     return photoDoc ? photoDoc.file_url : null;
   }
 
-  // Composant pour dessiner une carte individuelle de membre
   const renderSingleBox = (p: any, branchColor = 'blue') => {
     const pBio = biographies.find(b => b.person_id === p.id);
     const pPhoto = getMemberPhoto(p.id);
@@ -287,43 +413,37 @@ export default function FamilyTreeApp() {
           <button onClick={() => handleOpenBio(p)} className="text-emerald-600 font-semibold hover:underline">
             📖 Fiche
           </button>
-          <button onClick={() => handleEdit(p)} className="text-blue-600 hover:underline">
-            Modifier
-          </button>
+          {userRole !== 'viewer' && (
+            <button onClick={() => handleEdit(p)} className="text-blue-600 hover:underline">
+              Modifier
+            </button>
+          )}
         </div>
       </div>
     );
   };
 
-  // Composant réutilisable pour afficher un membre, ses conjoints et ses enfants en cascade
   const renderPersonCard = (person: any, branchColor = 'blue') => {
-    // Récupérer les conjoints de la personne
-    const spouseRelations = relations.filter(r => 
-      r.relation_type === 'conjoint' && 
-      (r.parent_id === person.id || r.child_id === person.id)
-    );
+    const spouseRelations = relations.filter(r => r.relation_type === 'conjoint' && (r.parent_id === person.id || r.child_id === person.id));
     const spouses = spouseRelations.map(sr => {
       const spouseId = sr.parent_id === person.id ? sr.child_id : sr.parent_id;
       return persons.find(p => p.id === spouseId);
     }).filter(Boolean);
 
-    // Enfants rattachés
     const childrenRelations = relations.filter(r => r.parent_id === person.id && r.relation_type === 'parent_enfant');
 
     return (
       <div key={person.id} className="flex flex-col items-center">
-        {/* Ligne du couple (Personne + Conjoint(s)) */}
         <div className="flex flex-wrap items-center justify-center gap-3">
           {renderSingleBox(person, branchColor)}
           {spouses.map(spouse => spouse && (
             <div key={spouse.id} className="flex items-center gap-3">
-              <span className="text-gray-400 font-bold text-lg" title="Conjoint(e)">💍</span>
+              <span className="text-gray-400 font-bold text-lg">💍</span>
               {renderSingleBox(spouse, branchColor)}
             </div>
           ))}
         </div>
 
-        {/* Affichage des enfants connectés en arborescence verticale descendante */}
         {childrenRelations.length > 0 && (
           <div className="flex flex-col items-center">
             <div className="w-0.5 h-6 bg-gray-300"></div>
@@ -354,23 +474,35 @@ export default function FamilyTreeApp() {
   return (
     <main className="min-h-screen bg-gray-50 p-6 md:p-12">
       <div className="max-w-7xl mx-auto">
-        <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Arbre Généalogique - Familles Madeke & Moukoumbi</h1>
-            <p className="text-gray-600 mt-1">Plateforme de centralisation mémorielle et historique.</p>
+            <h1 className="text-2xl font-bold text-gray-800">Arbre Généalogique - Familles Madeke & Moukoumbi</h1>
+            <p className="text-gray-500 text-xs mt-1">
+              Connecté en tant que : <span className="font-semibold text-blue-600">{session.user.email}</span> ({userRole.toUpperCase()})
+            </p>
           </div>
-          <div className="flex bg-white p-1 rounded-xl shadow-sm border">
+          <div className="flex items-center gap-4">
+            <div className="flex bg-gray-100 p-1 rounded-xl">
+              <button
+                onClick={() => setActiveTab('arbre')}
+                className={`px-4 py-2 rounded-lg font-medium text-sm transition ${activeTab === 'arbre' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+              >
+                🌳 Organigramme
+              </button>
+              {userRole !== 'viewer' && (
+                <button
+                  onClick={() => setActiveTab('gestion')}
+                  className={`px-4 py-2 rounded-lg font-medium text-sm transition ${activeTab === 'gestion' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+                >
+                  ⚙️ Gestion & Tableau
+                </button>
+              )}
+            </div>
             <button
-              onClick={() => setActiveTab('arbre')}
-              className={`px-4 py-2 rounded-lg font-medium text-sm transition ${activeTab === 'arbre' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+              onClick={handleLogout}
+              className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-red-100 transition"
             >
-              🌳 Organigramme Hiérarchique
-            </button>
-            <button
-              onClick={() => setActiveTab('gestion')}
-              className={`px-4 py-2 rounded-lg font-medium text-sm transition ${activeTab === 'gestion' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-            >
-              ⚙️ Gestion & Tableau
+              Déconnexion
             </button>
           </div>
         </header>
@@ -388,13 +520,12 @@ export default function FamilyTreeApp() {
           </span>
         </div>
 
-        {/* VUE 1 : ORGANIGRAMME HIÉRARCHIQUE */}
+        {/* VUE 1 : ORGANIGRAMME */}
         {activeTab === 'arbre' && (
           <div className="space-y-16 overflow-x-auto pb-12">
-            {/* Branche Moukoumbi */}
             <section className="bg-white p-8 rounded-2xl shadow-sm border border-blue-100 min-w-[700px]">
               <div className="border-b pb-4 mb-8 flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-blue-900">🌿 Organigramme - Famille MOUKOUMBI</h2>
+                <h2 className="text-xl font-bold text-blue-900">🌿 Organigramme - Famille MOUKOUMBI</h2>
                 <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold">
                   {brancheMoukoumbi.length} membres
                 </span>
@@ -408,10 +539,9 @@ export default function FamilyTreeApp() {
               </div>
             </section>
 
-            {/* Branche Madeke */}
             <section className="bg-white p-8 rounded-2xl shadow-sm border border-emerald-100 min-w-[700px]">
               <div className="border-b pb-4 mb-8 flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-emerald-900">🌿 Organigramme - Famille MADEKE</h2>
+                <h2 className="text-xl font-bold text-emerald-900">🌿 Organigramme - Famille MADEKE</h2>
                 <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-semibold">
                   {brancheMadeke.length} membres
                 </span>
@@ -425,7 +555,6 @@ export default function FamilyTreeApp() {
               </div>
             </section>
 
-            {/* Membres Communs / Autres */}
             {membresMixtesOuSansBranche.length > 0 && (
               <section className="bg-white p-8 rounded-2xl shadow-sm border border-purple-100 min-w-[700px]">
                 <div className="border-b pb-4 mb-8 flex justify-between items-center">
@@ -442,8 +571,8 @@ export default function FamilyTreeApp() {
           </div>
         )}
 
-        {/* VUE 2 : GESTION & TABLEAU */}
-        {activeTab === 'gestion' && (
+        {/* VUE 2 : GESTION & TABLEAU (MASQUÉE POUR LES VIEWERS) */}
+        {activeTab === 'gestion' && userRole !== 'viewer' && (
           <div className="space-y-8">
             <section className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
               <h2 className="text-xl font-semibold text-gray-700 mb-4">
@@ -466,17 +595,19 @@ export default function FamilyTreeApp() {
                   required
                   className="border p-2 rounded-lg text-gray-800 text-sm"
                 />
-                <input
-                  type="text"
-                  placeholder="Surnom / Branche"
+                <select
                   value={formData.surnom}
                   onChange={e => setFormData({ ...formData, surnom: e.target.value })}
-                  className="border p-2 rounded-lg text-gray-800 text-sm"
-                />
+                  className="border p-2 rounded-lg text-gray-800 text-sm bg-white"
+                >
+                  <option value="Branche MOUKOUMBI">Branche MOUKOUMBI</option>
+                  <option value="Branche MADEKE">Branche MADEKE</option>
+                  <option value="Commun / Autre">Commun / Autre</option>
+                </select>
                 <select
                   value={formData.sexe}
                   onChange={e => setFormData({ ...formData, sexe: e.target.value })}
-                  className="border p-2 rounded-lg text-gray-800 text-sm"
+                  className="border p-2 rounded-lg text-gray-800 text-sm bg-white"
                 >
                   <option value="M">Masculin</option>
                   <option value="F">Féminin</option>
@@ -543,7 +674,9 @@ export default function FamilyTreeApp() {
                           <td className="p-3 text-right space-x-2">
                             <button onClick={() => handleOpenBio(person)} className="text-emerald-600 hover:underline font-medium">Fiche</button>
                             <button onClick={() => handleEdit(person)} className="text-blue-600 hover:underline">Modifier</button>
-                            <button onClick={() => handleDelete(person.id)} className="text-red-600 hover:underline">Supprimer</button>
+                            {userRole === 'admin' && (
+                              <button onClick={() => handleDelete(person.id)} className="text-red-600 hover:underline">Supprimer</button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -585,36 +718,40 @@ export default function FamilyTreeApp() {
                         <span key={r.id} className="bg-white border px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 shadow-sm">
                           <span className="font-semibold text-blue-800">{labelLien} :</span>
                           <span className="uppercase">{otherPerson.nom} {otherPerson.prenom}</span>
-                          <button onClick={() => deleteRelation(r.id)} className="text-red-500 font-bold ml-1 hover:text-red-700">×</button>
+                          {userRole !== 'viewer' && (
+                            <button onClick={() => deleteRelation(r.id)} className="text-red-500 font-bold ml-1 hover:text-red-700">×</button>
+                          )}
                         </span>
                       );
                     })
                   )}
                 </div>
 
-                <form onSubmit={handleAddRelationToPerson} className="pt-3 border-t border-blue-200 flex flex-col sm:flex-row gap-2">
-                  <select
-                    value={newRelationTargetId}
-                    onChange={e => setNewRelationTargetId(e.target.value)}
-                    className="border p-2 rounded text-xs flex-1 text-gray-800 bg-white"
-                  >
-                    <option value="">Lier un autre membre...</option>
-                    {persons.filter(p => p.id !== selectedPerson.id).map(p => (
-                      <option key={p.id} value={p.id}>{p.nom} {p.prenom}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={newRelationType}
-                    onChange={e => setNewRelationType(e.target.value as any)}
-                    className="border p-2 rounded text-xs text-gray-800 bg-white"
-                  >
-                    <option value="parent_enfant">Parent / Enfant</option>
-                    <option value="conjoint">Conjoint(e)</option>
-                  </select>
-                  <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded text-xs font-medium hover:bg-blue-700">
-                    + Ajouter
-                  </button>
-                </form>
+                {userRole !== 'viewer' && (
+                  <form onSubmit={handleAddRelationToPerson} className="pt-3 border-t border-blue-200 flex flex-col sm:flex-row gap-2">
+                    <select
+                      value={newRelationTargetId}
+                      onChange={e => setNewRelationTargetId(e.target.value)}
+                      className="border p-2 rounded text-xs flex-1 text-gray-800 bg-white"
+                    >
+                      <option value="">Lier un autre membre...</option>
+                      {persons.filter(p => p.id !== selectedPerson.id).map(p => (
+                        <option key={p.id} value={p.id}>{p.nom} {p.prenom}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={newRelationType}
+                      onChange={e => setNewRelationType(e.target.value as any)}
+                      className="border p-2 rounded text-xs text-gray-800 bg-white"
+                    >
+                      <option value="parent_enfant">Parent / Enfant</option>
+                      <option value="conjoint">Conjoint(e)</option>
+                    </select>
+                    <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded text-xs font-medium hover:bg-blue-700">
+                      + Ajouter
+                    </button>
+                  </form>
+                )}
               </div>
 
               {/* SECTION 2 : BIOGRAPHIE, IMPACTS & HÉRITAGE */}
@@ -625,9 +762,9 @@ export default function FamilyTreeApp() {
                   <input
                     type="text"
                     value={bioData.professions}
+                    disabled={userRole === 'viewer'}
                     onChange={e => setBioData({ ...bioData, professions: e.target.value })}
-                    placeholder="Ex: Enseignant, Agriculteur, Commerçant..."
-                    className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white"
+                    className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white disabled:bg-gray-100"
                   />
                 </div>
 
@@ -636,18 +773,20 @@ export default function FamilyTreeApp() {
                     <label className="block text-xs font-medium text-gray-700 mb-1">Impact dans la famille</label>
                     <textarea
                       value={bioData.impact_famille}
+                      disabled={userRole === 'viewer'}
                       onChange={e => setBioData({ ...bioData, impact_famille: e.target.value })}
                       rows={2}
-                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white"
+                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white disabled:bg-gray-100"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Impact dans la société</label>
                     <textarea
                       value={bioData.impact_societe}
+                      disabled={userRole === 'viewer'}
                       onChange={e => setBioData({ ...bioData, impact_societe: e.target.value })}
                       rows={2}
-                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white"
+                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white disabled:bg-gray-100"
                     />
                   </div>
                 </div>
@@ -657,27 +796,31 @@ export default function FamilyTreeApp() {
                     <label className="block text-xs font-medium text-gray-700 mb-1">Dons & Talents</label>
                     <textarea
                       value={bioData.dons_talents}
+                      disabled={userRole === 'viewer'}
                       onChange={e => setBioData({ ...bioData, dons_talents: e.target.value })}
                       rows={2}
-                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white"
+                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white disabled:bg-gray-100"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Héritage (Valeurs, Terres, Biens)</label>
                     <textarea
                       value={bioData.heritage}
+                      disabled={userRole === 'viewer'}
                       onChange={e => setBioData({ ...bioData, heritage: e.target.value })}
                       rows={2}
-                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white"
+                      className="border p-2 rounded-lg w-full text-gray-800 text-sm bg-white disabled:bg-gray-100"
                     />
                   </div>
                 </div>
 
-                <div className="flex justify-end">
-                  <button type="submit" className="bg-amber-600 text-white px-5 py-2 rounded-lg text-xs font-medium hover:bg-amber-700">
-                    Enregistrer la biographie
-                  </button>
-                </div>
+                {userRole !== 'viewer' && (
+                  <div className="flex justify-end">
+                    <button type="submit" className="bg-amber-600 text-white px-5 py-2 rounded-lg text-xs font-medium hover:bg-amber-700">
+                      Enregistrer la biographie
+                    </button>
+                  </div>
+                )}
               </form>
 
               {/* SECTION 3 : DOCUMENTS & ARCHIVES */}
@@ -692,52 +835,56 @@ export default function FamilyTreeApp() {
                       </div>
                       <div className="flex items-center gap-3">
                         <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-blue-600 underline font-medium">Ouvrir</a>
-                        <button onClick={() => handleDeleteDocument(doc.id)} className="text-red-500 font-bold">×</button>
+                        {userRole === 'admin' && (
+                          <button onClick={() => handleDeleteDocument(doc.id)} className="text-red-500 font-bold">×</button>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
 
-                <form onSubmit={handleAddDocument} className="pt-3 border-t border-gray-200 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    placeholder="Titre (ex: Portrait)"
-                    value={docData.titre}
-                    onChange={e => setDocData({ ...docData, titre: e.target.value })}
-                    required
-                    className="border p-2 rounded text-xs bg-white text-gray-800"
-                  />
-                  <select
-                    value={docData.type_document}
-                    onChange={e => setDocData({ ...docData, type_document: e.target.value })}
-                    className="border p-2 rounded text-xs bg-white text-gray-800"
-                  >
-                    <option value="photo_archive">Photo d'archive</option>
-                    <option value="naissance">Naissance</option>
-                    <option value="mariage">Mariage</option>
-                    <option value="deces">Décès</option>
-                    <option value="autre">Autre</option>
-                  </select>
-                  
-                  <div className="sm:col-span-2">
+                {userRole !== 'viewer' && (
+                  <form onSubmit={handleAddDocument} className="pt-3 border-t border-gray-200 grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <input
-                      type="file"
-                      onChange={e => setUploadingFile(e.target.files?.[0] || null)}
-                      className="border p-1.5 rounded text-xs bg-white text-gray-800 w-full"
+                      type="text"
+                      placeholder="Titre (ex: Portrait)"
+                      value={docData.titre}
+                      onChange={e => setDocData({ ...docData, titre: e.target.value })}
                       required
+                      className="border p-2 rounded text-xs bg-white text-gray-800"
                     />
-                  </div>
-
-                  <div className="sm:col-span-2 flex justify-end">
-                    <button 
-                      type="submit" 
-                      disabled={isUploading}
-                      className="bg-gray-700 text-white px-4 py-2 rounded text-xs font-medium hover:bg-gray-800 disabled:opacity-50"
+                    <select
+                      value={docData.type_document}
+                      onChange={e => setDocData({ ...docData, type_document: e.target.value })}
+                      className="border p-2 rounded text-xs bg-white text-gray-800"
                     >
-                      {isUploading ? 'Téléversement...' : '📤 Uploader et archiver'}
-                    </button>
-                  </div>
-                </form>
+                      <option value="photo_archive">Photo d'archive</option>
+                      <option value="naissance">Naissance</option>
+                      <option value="mariage">Mariage</option>
+                      <option value="deces">Décès</option>
+                      <option value="autre">Autre</option>
+                    </select>
+                    
+                    <div className="sm:col-span-2">
+                      <input
+                        type="file"
+                        onChange={e => setUploadingFile(e.target.files?.[0] || null)}
+                        className="border p-1.5 rounded text-xs bg-white text-gray-800 w-full"
+                        required
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 flex justify-end">
+                      <button 
+                        type="submit" 
+                        disabled={isUploading}
+                        className="bg-gray-700 text-white px-4 py-2 rounded text-xs font-medium hover:bg-gray-800 disabled:opacity-50"
+                      >
+                        {isUploading ? 'Téléversement...' : '📤 Uploader et archiver'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               <div className="flex justify-end pt-4 border-t">
